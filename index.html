@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>小王子星際塊魂 MVP</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050510; touch-action: none; font-family: 'PingFang TC', sans-serif;}
+        canvas { display: block; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #FFF; pointer-events: none; text-shadow: 2px 2px 4px rgba(0,0,0,0.8);}
+        #ui h1 { margin: 0 0 10px 0; font-size: 24px; color: #F9D71C; }
+        #ui p { margin: 5px 0; font-size: 16px; }
+        
+        /* 虛擬搖桿 UI */
+        #joystick-zone { position: absolute; bottom: 30px; left: 30px; width: 150px; height: 150px; border-radius: 50%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.3); touch-action: none;}
+        #joystick-knob { position: absolute; top: 50%; left: 50%; width: 60px; height: 60px; border-radius: 50%; background: rgba(249,215,28,0.7); transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 0 10px rgba(0,0,0,0.5);}
+        #instructions { position: absolute; bottom: 30px; right: 30px; color: rgba(255,255,255,0.6); text-align: right; pointer-events: none;}
+    </style>
+    <!-- 引入 Three.js (使用 CDN) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <div id="ui">
+        <h1>小王子 B612 塊魂</h1>
+        <p>當前體積: <span id="size">1.00</span> m</p>
+        <p>收集進度: <span id="score">0</span></p>
+    </div>
+    <div id="joystick-zone"><div id="joystick-knob"></div></div>
+    <div id="instructions">左下角搖桿移動<br>(收集比自己小的物品)</div>
+
+    <script>
+        // === 1. 遊戲核心變數 ===
+        let scene, camera, renderer;
+        let planet, playerContainer, playerMesh;
+        let planetRadius = 30;
+        let playerRadius = 1.0;
+        let baseSpeed = 0.15;
+        let collectibles = [];
+        
+        // 搖桿變數
+        let joyVector = new THREE.Vector2(0, 0);
+        let isDragging = false;
+
+        // === 2. 初始化場景 ===
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050510, 0.015);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.body.appendChild(renderer.domElement);
+
+            // 光源設定 (宇宙星光與太陽光)
+            const ambientLight = new THREE.AmbientLight(0x404050, 1.5);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xfffae6, 1.2);
+            dirLight.position.set(50, 100, 50);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            scene.add(dirLight);
+
+            // 星空背景
+            createStarfield();
+
+            // === 3. 創建 B612 星球 ===
+            planet = new THREE.Group();
+            scene.add(planet);
+
+            const planetGeo = new THREE.SphereGeometry(planetRadius, 64, 64);
+            const planetMat = new THREE.MeshStandardMaterial({ 
+                color: 0x8CB07D, // 柔和的草綠色
+                roughness: 0.8, 
+                metalness: 0.1 
+            });
+            const planetMesh = new THREE.Mesh(planetGeo, planetMat);
+            planetMesh.receiveShadow = true;
+            planet.add(planetMesh);
+
+            // === 4. 創建小王子 (玩家) ===
+            // playerContainer 固定在星球正上方，不旋轉，只負責跟隨星球半徑上升
+            playerContainer = new THREE.Group();
+            playerContainer.position.set(0, planetRadius + playerRadius, 0);
+            scene.add(playerContainer);
+
+            // playerMesh 是實際滾動的球體，也是黏著物品的載體
+            const playerGeo = new THREE.SphereGeometry(1, 32, 32);
+            const playerMat = new THREE.MeshStandardMaterial({ color: 0xF9D71C, roughness: 0.4 });
+            playerMesh = new THREE.Mesh(playerGeo, playerMat);
+            playerMesh.castShadow = true;
+            playerContainer.add(playerMesh);
+
+            // === 5. 在星球上撒滿物品 ===
+            populatePlanet();
+
+            // === 6. 事件綁定 ===
+            setupJoystick();
+            window.addEventListener('resize', onWindowResize, false);
+
+            updateCamera();
+            animate();
+        }
+
+        // === 星空背景 ===
+        function createStarfield() {
+            const starsGeo = new THREE.BufferGeometry();
+            const starsMat = new THREE.PointsMaterial({color: 0xFFFFFF, size: 0.5, transparent: true, opacity: 0.8});
+            const starsVertices = [];
+            for(let i=0; i<1000; i++) {
+                const r = 100 + Math.random() * 200;
+                const theta = 2 * Math.PI * Math.random();
+                const phi = Math.acos(2 * Math.random() - 1);
+                const x = r * Math.sin(phi) * Math.cos(theta);
+                const y = r * Math.sin(phi) * Math.sin(theta);
+                const z = r * Math.cos(phi);
+                starsVertices.push(x, y, z);
+            }
+            starsGeo.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+            const starField = new THREE.Points(starsGeo, starsMat);
+            scene.add(starField);
+        }
+
+        // === 隨機生成 B612 上的物件 ===
+        function populatePlanet() {
+            const types = [
+                { name: 'rose', color: 0xE63946, geo: new THREE.ConeGeometry(0.3, 0.8, 8), radius: 0.4, count: 50 }, // 玫瑰
+                { name: 'baobab', color: 0x606C38, geo: new THREE.CylinderGeometry(0.2, 0.4, 1.5, 8), radius: 0.8, count: 40 }, // 猴麵包樹芽
+                { name: 'volcano', color: 0x6C757D, geo: new THREE.ConeGeometry(1.5, 1.2, 16), radius: 1.5, count: 15 }, // 小火山
+                { name: 'star', color: 0xFFD166, geo: new THREE.IcosahedronGeometry(0.5, 0), radius: 0.5, count: 80 } // 掉落的星星
+            ];
+
+            types.forEach(type => {
+                const mat = new THREE.MeshStandardMaterial({ color: type.color, roughness: 0.7 });
+                for(let i=0; i<type.count; i++) {
+                    const mesh = new THREE.Mesh(type.geo, mat);
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+                    
+                    // 隨機球面座標
+                    const theta = 2 * Math.PI * Math.random();
+                    const phi = Math.acos(2 * Math.random() - 1);
+                    
+                    // 確保物品不在小王子出生點(正上方)附近
+                    if(phi < 0.2) continue;
+
+                    const x = planetRadius * Math.sin(phi) * Math.cos(theta);
+                    const y = planetRadius * Math.sin(phi) * Math.sin(theta);
+                    const z = planetRadius * Math.cos(phi);
+                    
+                    mesh.position.set(x, y, z);
+                    mesh.lookAt(0, 0, 0); // 底部朝向地心
+                    mesh.rotateX(Math.PI / 2); // 依幾何體調整朝向
+                    
+                    // 綁定自訂屬性供碰撞偵測使用
+                    mesh.userData = { radius: type.radius, isCollected: false };
+                    
+                    planet.add(mesh);
+                    collectibles.push(mesh);
+                }
+            });
+        }
+
+        // === 虛擬搖桿邏輯 (支援 iPad 觸控) ===
+        function setupJoystick() {
+            const zone = document.getElementById('joystick-zone');
+            const knob = document.getElementById('joystick-knob');
+            let centerX, centerY;
+            const maxRadius = 45;
+
+            function onStart(e) {
+                isDragging = true;
+                const rect = zone.getBoundingClientRect();
+                centerX = rect.left + rect.width / 2;
+                centerY = rect.top + rect.height / 2;
+                onMove(e);
+            }
+
+            function onMove(e) {
+                if (!isDragging) return;
+                e.preventDefault();
+                let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                let clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+                let dx = clientX - centerX;
+                let dy = clientY - centerY;
+                const distance = Math.min(Math.sqrt(dx*dx + dy*dy), maxRadius);
+                const angle = Math.atan2(dy, dx);
+
+                const knobX = distance * Math.cos(angle);
+                const knobY = distance * Math.sin(angle);
+                
+                knob.style.transform = `translate(calc(-50% + ${knobX}px), calc(-50% + ${knobY}px))`;
+                
+                // 轉為正規化向量 (-1 到 1)
+                joyVector.x = knobX / maxRadius;
+                joyVector.y = -knobY / maxRadius; // Y軸反轉以符合直覺
+            }
+
+            function onEnd(e) {
+                isDragging = false;
+                knob.style.transform = `translate(-50%, -50%)`;
+                joyVector.set(0, 0);
+            }
+
+            zone.addEventListener('mousedown', onStart);
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onEnd);
+            
+            zone.addEventListener('touchstart', onStart, {passive: false});
+            document.addEventListener('touchmove', onMove, {passive: false});
+            document.addEventListener('touchend', onEnd);
+        }
+
+        // === 碰撞偵測與黏著系統 ===
+        let score = 0;
+        function checkCollisions() {
+            const playerWorldPos = new THREE.Vector3();
+            playerMesh.getWorldPosition(playerWorldPos);
+
+            // 必須從後往前遍歷，因為我們可能會從陣列中移除元素
+            for (let i = collectibles.length - 1; i >= 0; i--) {
+                const item = collectibles[i];
+                if (item.userData.isCollected) continue;
+
+                const itemWorldPos = new THREE.Vector3();
+                item.getWorldPosition(itemWorldPos);
+
+                const distance = playerWorldPos.distanceTo(itemWorldPos);
+                
+                // 如果距離小於兩者半徑之和，且玩家比物品大
+                if (distance < playerRadius + item.userData.radius) {
+                    if (playerRadius > item.userData.radius * 1.2) {
+                        // 觸發黏著！
+                        item.userData.isCollected = true;
+                        
+                        // Three.js 的 attach 會自動計算相對變換矩陣，保持視覺位置不變
+                        playerMesh.attach(item);
+                        collectibles.splice(i, 1);
+
+                        // 成長機制
+                        const volumeIncrease = Math.pow(item.userData.radius, 3) * 0.1;
+                        const currentVolume = Math.pow(playerRadius, 3);
+                        playerRadius = Math.cbrt(currentVolume + volumeIncrease);
+                        
+                        // 更新 UI 與物理位置
+                        playerMesh.scale.setScalar(playerRadius);
+                        // 修正：玩家外觀放大，但內部黏著物的 local scale 會跟著被放大，所以要反向縮放以保持物品原大小
+                        item.scale.multiplyScalar(1 / playerRadius);
+
+                        playerContainer.position.y = planetRadius + playerRadius;
+                        
+                        score++;
+                        document.getElementById('size').innerText = playerRadius.toFixed(2);
+                        document.getElementById('score').innerText = score;
+                        
+                        updateCamera();
+                    }
+                }
+            }
+        }
+
+        // === 更新攝影機位置 ===
+        function updateCamera() {
+            // 隨著體積變大，攝影機往後拉遠
+            const camDistanceZ = playerRadius * 6 + 10;
+            const camDistanceY = playerRadius * 3 + 5;
+            camera.position.set(0, playerContainer.position.y + camDistanceY, camDistanceZ);
+            camera.lookAt(playerContainer.position);
+        }
+
+        // === 遊戲主迴圈 ===
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (joyVector.length() > 0.05) {
+                // 1. 計算旋轉軸與角度
+                // 當搖桿向上 (joyVector.y > 0)，星球必須繞 X 軸正向旋轉，使表面朝螢幕滾動，玩家產生往前走的錯覺
+                const moveAxis = new THREE.Vector3(joyVector.y, 0, -joyVector.x).normalize();
+                const moveSpeed = joyVector.length() * baseSpeed;
+                
+                // 2. 轉動 B612 星球
+                const planetAngle = moveSpeed / planetRadius;
+                planet.rotateOnWorldAxis(moveAxis, planetAngle);
+
+                // 3. 轉動小王子 (Katamari 球體)
+                // 球體滾動方向與星球旋轉方向相反
+                const playerAngle = moveSpeed / playerRadius;
+                playerMesh.rotateOnWorldAxis(moveAxis, -playerAngle);
+            }
+
+            checkCollisions();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 啟動遊戲
+        init();
+    </script>
+</body>
+</html>
