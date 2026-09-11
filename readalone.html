@@ -3,49 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web互動點讀筆</title>
-    <!-- 引入 Tailwind CSS -->
+    <title>Web 互動點讀筆</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 引入 Tesseract.js 用於純前端 OCR -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
-        /* 隱藏捲軸但保持可捲動 */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        /* 點擊高亮動畫 */
-        .highlight-flash { animation: flash 0.5s ease-out; }
+        /* 點擊高亮動畫，會套用使用者選擇的顏色 */
+        .highlight-flash { animation: flash 0.6s ease-out; }
         @keyframes flash {
-            0% { background-color: rgba(250, 204, 21, 0.6); }
-            100% { background-color: rgba(250, 204, 21, 0); }
+            0% { opacity: 0.9; transform: scale(1.02); }
+            100% { opacity: var(--user-opacity, 0.3); transform: scale(1); }
+        }
+        /* OCR 區塊預設樣式，套用 CSS 變數 */
+        .ocr-box {
+            background-color: var(--user-color, #fbbf24); /* 預設黃色 */
+            opacity: var(--user-opacity, 0.3);          /* 預設 30% 透明 */
         }
     </style>
 </head>
 <body class="bg-gray-100 font-sans text-gray-800 antialiased selection:bg-blue-200">
 
-    <!-- 主容器，模擬手機 App 介面 -->
     <div class="max-w-md mx-auto bg-white min-h-screen shadow-xl relative flex flex-col overflow-hidden">
         
         <!-- 頂部導航列 -->
         <header class="bg-blue-600 text-white p-4 flex justify-between items-center z-10 shadow-md">
             <h1 class="text-xl font-bold tracking-wide">Web 點讀筆</h1>
             <div class="flex gap-3">
-                <button onclick="toggleModal('settingsModal')" class="p-1 hover:bg-blue-700 rounded transition">⚙️設定</button>
-                <button onclick="toggleModal('dataModal')" class="p-1 hover:bg-blue-700 rounded transition">📁資料</button>
+                <button onclick="toggleModal('settingsModal')" class="p-1 hover:bg-blue-700 rounded transition text-sm">⚙️設定</button>
+                <button onclick="toggleModal('dataModal')" class="p-1 hover:bg-blue-700 rounded transition text-sm">📁資料</button>
             </div>
         </header>
 
         <!-- 主要內容區 -->
         <main class="flex-1 overflow-y-auto relative bg-gray-50 p-2 no-scrollbar" id="mainScroll">
             <!-- 拍照/上傳區 -->
-            <div class="mb-4 text-center mt-4">
-                <label class="bg-blue-500 text-white px-6 py-3 rounded-full shadow-lg font-semibold cursor-pointer active:bg-blue-600 transition inline-block">
-                    📷 拍攝或選擇照片
+            <div class="mb-4 text-center mt-4 flex justify-center gap-2">
+                <label class="bg-blue-500 text-white px-5 py-2 rounded-lg shadow-md font-semibold cursor-pointer active:bg-blue-600 transition">
+                    📷 拍攝/相簿
                     <input type="file" accept="image/*" capture="environment" id="imageInput" class="hidden">
                 </label>
+                <!-- 停止朗讀按鈕 (預設隱藏) -->
+                <button id="stopBtn" onclick="stopTTS()" class="hidden bg-red-500 text-white px-5 py-2 rounded-lg shadow-md font-semibold active:bg-red-600 transition">
+                    ⏹️ 停止朗讀
+                </button>
             </div>
 
             <!-- 狀態提示 -->
-            <div id="statusText" class="text-center text-sm text-gray-500 mb-2 h-5"></div>
+            <div id="statusText" class="text-center text-sm font-bold text-gray-500 mb-2 h-5"></div>
 
             <!-- 圖片與互動疊加層容器 -->
             <div id="imageContainer" class="relative w-full shadow-sm bg-white border border-gray-200 hidden mx-auto" style="max-width: 100%;">
@@ -54,7 +59,7 @@
             </div>
         </main>
 
-        <!-- 底部互動面板 (翻譯結果與功能) -->
+        <!-- 底部互動面板 -->
         <div class="bg-white border-t border-gray-200 p-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-10 shrink-0">
             <div class="mb-2">
                 <p class="text-xs text-gray-500 font-semibold mb-1">原文</p>
@@ -74,25 +79,62 @@
             </div>
         </div>
 
-        <!-- 模態框：語音設定 -->
+        <!-- 模態框：語音與圖層設定 -->
         <div id="settingsModal" class="hidden absolute inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
-            <div class="bg-white w-full sm:w-11/12 sm:rounded-xl rounded-t-xl p-5 shadow-2xl transition-transform">
-                <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-lg font-bold">語音設定 (TTS)</h2>
-                    <button onclick="toggleModal('settingsModal')" class="text-gray-500 text-xl font-bold p-2">&times;</button>
+            <div class="bg-white w-full sm:w-11/12 sm:rounded-xl rounded-t-xl p-5 shadow-2xl transition-transform max-h-[80vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-4 border-b pb-2">
+                    <h2 class="text-lg font-bold">⚙️ 系統設定</h2>
+                    <button onclick="toggleModal('settingsModal')" class="text-gray-500 text-2xl font-bold p-1 leading-none">&times;</button>
                 </div>
-                <div class="space-y-4">
+                
+                <div class="space-y-5">
+                    <!-- 語音設定 -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">語速 (Rate): <span id="rateVal">1.0</span></label>
-                        <input type="range" id="rateInput" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-blue-500">
+                        <h3 class="font-bold text-gray-700 mb-3 border-l-4 border-blue-500 pl-2">語音 (TTS)</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">人聲選擇 (僅顯示本機語音)</label>
+                                <select id="voiceSelect" class="w-full p-2 border border-gray-300 rounded focus:ring-blue-500 text-sm"></select>
+                            </div>
+                            <div>
+                                <label class="flex justify-between text-sm font-medium text-gray-700 mb-1">
+                                    <span>語速 (Rate)</span> <span id="rateVal">1.0</span>
+                                </label>
+                                <input type="range" id="rateInput" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full">
+                            </div>
+                            <div>
+                                <label class="flex justify-between text-sm font-medium text-gray-700 mb-1">
+                                    <span>音調 (Pitch)</span> <span id="pitchVal">1.0</span>
+                                </label>
+                                <input type="range" id="pitchInput" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full">
+                            </div>
+                            <button onclick="resetTTSSettings()" class="w-full py-2 bg-gray-200 text-gray-700 text-sm rounded font-bold hover:bg-gray-300">
+                                ↺ 還原語音預設值
+                            </button>
+                        </div>
                     </div>
+
+                    <!-- 圖層外觀設定 -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">音調 (Pitch): <span id="pitchVal">1.0</span></label>
-                        <input type="range" id="pitchInput" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-blue-500">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">人聲選擇 (Voice)</label>
-                        <select id="voiceSelect" class="w-full p-2 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500 text-sm"></select>
+                        <h3 class="font-bold text-gray-700 mb-3 border-l-4 border-yellow-400 pl-2">標示圖層外觀</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center gap-3">
+                                <label class="text-sm font-medium text-gray-700">圖層顏色：</label>
+                                <input type="color" id="boxColorInput" value="#fbbf24" class="h-8 w-14 cursor-pointer" onchange="updateBoxStyle()">
+                            </div>
+                            <div>
+                                <label class="flex justify-between text-sm font-medium text-gray-700 mb-1">
+                                    <span>透明度 (Opacity)</span> <span id="opacityVal">30%</span>
+                                </label>
+                                <input type="range" id="boxOpacityInput" min="0" max="1" step="0.1" value="0.3" class="w-full" oninput="updateBoxStyle()">
+                            </div>
+                            <!-- 預覽區塊 -->
+                            <div class="w-full h-12 bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] bg-gray-100 border border-gray-300 flex items-center justify-center rounded">
+                                <div id="previewBox" class="ocr-box border-2 border-white w-3/4 h-3/4 flex items-center justify-center text-xs font-bold text-black mix-blend-multiply">
+                                    預覽效果
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -100,11 +142,11 @@
 
         <!-- 模態框：資料管理 (生詞本與歷史) -->
         <div id="dataModal" class="hidden absolute inset-0 bg-white z-50 flex flex-col">
-            <header class="bg-gray-800 text-white p-4 flex justify-between items-center">
+            <header class="bg-gray-800 text-white p-4 flex justify-between items-center shrink-0">
                 <h2 class="text-lg font-bold">資料管理</h2>
-                <button onclick="toggleModal('dataModal')" class="text-white text-xl font-bold px-2">&times;</button>
+                <button onclick="toggleModal('dataModal')" class="text-white text-2xl font-bold px-2 leading-none">&times;</button>
             </header>
-            <div class="flex border-b border-gray-200">
+            <div class="flex border-b border-gray-200 shrink-0">
                 <button onclick="switchTab('vocab')" id="tab-vocab" class="flex-1 py-3 text-center font-bold border-b-2 border-blue-500 text-blue-600">生詞本</button>
                 <button onclick="switchTab('history')" id="tab-history" class="flex-1 py-3 text-center font-bold border-b-2 border-transparent text-gray-500">歷史紀錄</button>
             </div>
@@ -112,10 +154,11 @@
                 <div id="vocabContent" class="space-y-3"></div>
                 <div id="historyContent" class="hidden space-y-3"></div>
             </div>
-            <div class="p-4 border-t border-gray-200 flex gap-2 bg-white">
-                <button onclick="exportData()" class="flex-1 bg-gray-200 text-gray-800 py-2 rounded font-medium active:bg-gray-300">匯出 JSON</button>
+            <!-- 匯出/匯入按鈕已在此處 -->
+            <div class="p-4 border-t border-gray-200 flex gap-2 bg-white shrink-0">
+                <button onclick="exportData()" class="flex-1 bg-gray-200 text-gray-800 py-2 rounded font-medium active:bg-gray-300">📤 匯出 JSON</button>
                 <label class="flex-1 bg-gray-800 text-white py-2 rounded font-medium text-center cursor-pointer active:bg-gray-900">
-                    匯入 JSON
+                    📥 匯入 JSON
                     <input type="file" accept=".json" class="hidden" onchange="importData(event)">
                 </label>
             </div>
@@ -123,28 +166,25 @@
 
     </div>
 
-    <!-- JavaScript 邏輯 -->
     <script>
         /* ================= 設定區 ================= */
-        // 請在此填入你的 Google Translate API Key
+        // 填入你的 Google Translate API Key
         const GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY_HERE"; 
         
-        /* ================= 狀態變數 ================= */
         let ocrLines = []; 
         let appData = { vocabulary: [], history: [] };
         let currentFocusText = "";
         let currentFocusTrans = "";
         
-        // 語音合成器初始化
         const synth = window.speechSynthesis;
         let voices = [];
+        let isReadingFullPage = false; // 追蹤整頁朗讀狀態
 
-        /* ================= 初始化與事件綁定 ================= */
+        /* ================= 初始化 ================= */
         document.addEventListener("DOMContentLoaded", () => {
             loadData();
             initTTS();
             
-            // 綁定設定拉桿顯示數值
             document.getElementById('rateInput').addEventListener('input', (e) => {
                 document.getElementById('rateVal').innerText = parseFloat(e.target.value).toFixed(1);
             });
@@ -152,49 +192,117 @@
                 document.getElementById('pitchVal').innerText = parseFloat(e.target.value).toFixed(1);
             });
 
-            // 圖片上傳事件
             document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+            
+            // 監聽發音結束事件，自動隱藏停止按鈕
+            synth.onend = () => {
+                isReadingFullPage = false;
+                document.getElementById('stopBtn').classList.add('hidden');
+                document.getElementById('originalText').innerText = currentFocusText || "等待點讀...";
+            };
+            synth.oncancel = synth.onend; // 被手動 cancel 也視同結束
         });
 
         /* ================= 語音 (TTS) 模組 ================= */
         function initTTS() {
             const populateVoices = () => {
-                voices = synth.getVoices().filter(v => v.lang.startsWith('en'));
+                // 1. 取得所有聲音
+                let allVoices = synth.getVoices();
+                
+                // 2. 嚴格過濾：必須是英文，且最好是 localService (本機端)，排除奇怪的網路聲音
+                voices = allVoices.filter(v => v.lang.startsWith('en') && v.localService === true);
+                
+                // 3. Fallback: 如果某些手機瀏覽器（如舊版 Android）全部都是 false，就退而求其次只濾英文
+                if(voices.length === 0) {
+                    voices = allVoices.filter(v => v.lang.startsWith('en'));
+                }
+
                 const voiceSelect = document.getElementById('voiceSelect');
                 voiceSelect.innerHTML = '';
                 voices.forEach((voice, i) => {
+                    // 標示 (本機) 讓使用者安心
+                    const isLocal = voice.localService ? '(本機)' : '(網路)';
                     const option = document.createElement('option');
-                    option.textContent = `${voice.name} (${voice.lang})`;
+                    option.textContent = `${voice.name} ${isLocal}`;
                     option.value = i;
+                    // 預設選擇常見的清晰聲音 (例如 iOS 的 Samantha)
+                    if(voice.name.includes('Samantha') || voice.name.includes('Google US English')) {
+                        option.selected = true;
+                    }
                     voiceSelect.appendChild(option);
                 });
             };
+            
+            // 由於 getVoices 在某些瀏覽器是非同步載入的
             populateVoices();
             if (speechSynthesis.onvoiceschanged !== undefined) {
                 speechSynthesis.onvoiceschanged = populateVoices;
             }
         }
 
+        // 1.1 還原語音預設值
+        function resetTTSSettings() {
+            document.getElementById('rateInput').value = 1.0;
+            document.getElementById('rateVal').innerText = "1.0";
+            document.getElementById('pitchInput').value = 1.0;
+            document.getElementById('pitchVal').innerText = "1.0";
+            
+            // 嘗試選回預設聲音 (如 Samantha 或預設的第一個)
+            const options = document.getElementById('voiceSelect').options;
+            for(let i = 0; i < options.length; i++) {
+                if(options[i].text.includes('Samantha') || options[i].text.includes('Google US English')) {
+                    document.getElementById('voiceSelect').selectedIndex = i;
+                    break;
+                }
+            }
+        }
+
         function speak(text) {
-            synth.cancel(); // 停止先前的發音
+            synth.cancel(); // 切斷之前的發音
             if (!text) return;
             const utterance = new SpeechSynthesisUtterance(text);
             
-            // 套用設定
             const selectedVoiceIndex = document.getElementById('voiceSelect').value;
             if (voices[selectedVoiceIndex]) utterance.voice = voices[selectedVoiceIndex];
             utterance.rate = document.getElementById('rateInput').value;
             utterance.pitch = document.getElementById('pitchInput').value;
             
+            // 綁定事件以控制停止按鈕顯示
+            utterance.onstart = () => { document.getElementById('stopBtn').classList.remove('hidden'); };
+            utterance.onend = () => { document.getElementById('stopBtn').classList.add('hidden'); };
+            utterance.oncancel = () => { document.getElementById('stopBtn').classList.add('hidden'); };
+
             synth.speak(utterance);
+        }
+
+        function stopTTS() {
+            synth.cancel();
+            isReadingFullPage = false;
+            document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('originalText').innerText = "朗讀已停止。";
         }
 
         async function readWholePage() {
             if(ocrLines.length === 0) return alert("沒有可朗讀的內容");
-            const fullText = ocrLines.map(line => line.text).join(". ");
-            speak(fullText);
+            isReadingFullPage = true;
+            // Tesseract 辨識出來的通常每一行是獨立的，我們用句號組合讓發音自然
+            const fullText = ocrLines.map(line => line.text.trim()).join(" . ");
             document.getElementById('originalText').innerText = "正在朗讀整頁...";
             document.getElementById('translatedText').innerText = "";
+            speak(fullText);
+        }
+
+        /* ================= 圖片標示圖層設定 ================= */
+        // 5. 調整圖片上那層顏色、透明度的功能
+        function updateBoxStyle() {
+            const color = document.getElementById('boxColorInput').value;
+            const opacity = document.getElementById('boxOpacityInput').value;
+            
+            document.getElementById('opacityVal').innerText = `${Math.round(opacity * 100)}%`;
+            
+            // 利用 CSS 變數一次性套用到所有標示框，包含選取高亮特效
+            document.documentElement.style.setProperty('--user-color', color);
+            document.documentElement.style.setProperty('--user-opacity', opacity);
         }
 
         /* ================= OCR 與圖片處理 ================= */
@@ -212,6 +320,7 @@
             imgEl.src = URL.createObjectURL(file);
             
             status.innerText = "⏳ 正在辨識文字中，請稍候...";
+            status.classList.replace('text-gray-500', 'text-blue-500');
             
             try {
                 const worker = await Tesseract.createWorker('eng');
@@ -219,35 +328,36 @@
                 ocrLines = data.lines; 
                 await worker.terminate();
                 
-                status.innerText = "✅ 辨識完成，請點擊圖片上的句子！";
+                status.innerText = "✅ 辨識完成，有色區塊可點擊！";
+                status.classList.replace('text-blue-500', 'text-green-500');
                 createOverlays(imgEl);
             } catch (error) {
                 console.error(error);
                 status.innerText = "❌ 辨識失敗，請重試。";
+                status.classList.replace('text-blue-500', 'text-red-500');
             }
         }
 
         function createOverlays(imgEl) {
             const overlayContainer = document.getElementById('overlayContainer');
             overlayContainer.innerHTML = '';
-            overlayContainer.classList.remove('pointer-events-none'); // 允許點擊
+            overlayContainer.classList.remove('pointer-events-none'); 
 
-            // 計算圖片實際顯示比例
             const naturalW = imgEl.naturalWidth;
             const naturalH = imgEl.naturalHeight;
 
             ocrLines.forEach(line => {
-                if(line.text.trim().length < 2) return; // 忽略太短的雜訊
+                if(line.text.trim().length < 2) return; 
                 const bbox = line.bbox;
                 
-                // 轉換為百分比，確保 RWD 縮放時位置精準
                 const left = (bbox.x0 / naturalW) * 100;
                 const top = (bbox.y0 / naturalH) * 100;
                 const width = ((bbox.x1 - bbox.x0) / naturalW) * 100;
                 const height = ((bbox.y1 - bbox.y0) / naturalH) * 100;
 
                 const div = document.createElement('div');
-                div.className = 'absolute border-2 border-transparent cursor-pointer transition-colors';
+                // 2. 套用 ocr-box 樣式，變成半透明有色區塊，方便使用者知道哪裡可點
+                div.className = 'absolute ocr-box cursor-pointer mix-blend-multiply border border-white/30 rounded-sm';
                 div.style.left = `${left}%`;
                 div.style.top = `${top}%`;
                 div.style.width = `${width}%`;
@@ -255,9 +365,11 @@
 
                 // 綁定點擊事件
                 div.addEventListener('click', async (e) => {
-                    // 視覺回饋
+                    // 如果正在整頁朗讀，點擊單字會先強制切斷
+                    if(isReadingFullPage) stopTTS();
+
                     div.classList.remove('highlight-flash');
-                    void div.offsetWidth; // 觸發重繪
+                    void div.offsetWidth; 
                     div.classList.add('highlight-flash');
                     
                     const text = line.text.replace(/\n/g, ' ').trim();
@@ -265,27 +377,24 @@
                     document.getElementById('originalText').innerText = text;
                     document.getElementById('translatedText').innerText = "翻譯中...";
                     
-                    // 朗讀
                     speak(text);
                     
-                    // 翻譯
                     const translated = await fetchTranslation(text);
                     currentFocusTrans = translated;
                     document.getElementById('translatedText').innerText = translated;
 
-                    // 寫入歷史
                     addToHistory(text, translated);
                 });
 
                 overlayContainer.appendChild(div);
             });
+            // 建立完畢後，確保讀取一次使用者設定的外觀
+            updateBoxStyle();
         }
 
         /* ================= 翻譯 API ================= */
         async function fetchTranslation(text) {
             if(!text) return "";
-            
-            // 若有設定 Google API Key
             if(GOOGLE_API_KEY && GOOGLE_API_KEY !== "YOUR_GOOGLE_API_KEY_HERE") {
                 try {
                     const url = `https://translation.googleapis.com/language/translate/v2?key=${GOOGLE_API_KEY}`;
@@ -297,12 +406,9 @@
                     const data = await res.json();
                     return data.data.translations[0].translatedText;
                 } catch(e) {
-                    console.error("Google 翻譯失敗:", e);
                     return "翻譯失敗，請檢查 API 狀態";
                 }
-            } 
-            // 備用免費 API (MyMemory) 用於無 Key 測試
-            else {
+            } else {
                 try {
                     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh-TW`;
                     const res = await fetch(url);
@@ -319,27 +425,22 @@
 
         function loadData() {
             const saved = localStorage.getItem(STORAGE_KEY);
-            if(saved) {
-                appData = JSON.parse(saved);
-            }
+            if(saved) appData = JSON.parse(saved);
         }
 
         function persistData() {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-            renderDataLists(); // 更新 UI
+            renderDataLists(); 
         }
 
         function addToHistory(text, translation) {
-            // 避免重複連續記錄一樣的句子
             if(appData.history.length > 0 && appData.history[0].text === text) return;
-            
             appData.history.unshift({
                 id: Date.now(),
                 text: text,
                 translation: translation,
                 time: new Date().toLocaleString()
             });
-            // 只保留最新 50 筆
             if(appData.history.length > 50) appData.history.pop();
             persistData();
         }
@@ -358,7 +459,6 @@
             });
             persistData();
             
-            // 特效回饋
             const btn = document.querySelector('button[onclick="saveToVocab()"]');
             const originalTxt = btn.innerText;
             btn.innerText = "✔️ 已存入";
@@ -370,8 +470,9 @@
             persistData();
         }
 
-        /* ================= 匯出與匯入 ================= */
+        /* ================= 4. 匯出與匯入 JSON ================= */
         function exportData() {
+            // 將記憶體中的 appData 轉換為 JSON 格式，並觸發瀏覽器下載
             const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -388,22 +489,24 @@
             reader.onload = (event) => {
                 try {
                     const parsed = JSON.parse(event.target.result);
+                    // 簡單驗證 JSON 結構是否為我們的資料
                     if(parsed.vocabulary && parsed.history) {
                         appData = parsed;
                         persistData();
                         alert("資料還原成功！");
-                        e.target.value = ''; // 清空 input
+                        renderDataLists(); // 更新畫面
+                        e.target.value = ''; // 清空 input 讓下次同檔也能選
                     } else {
                         alert("JSON 格式不符");
                     }
                 } catch(err) {
-                    alert("檔案讀取失敗");
+                    alert("檔案讀取失敗，可能不是有效的 JSON 檔");
                 }
             };
             reader.readAsText(file);
         }
 
-        /* ================= UI 互動 (模態框與切換) ================= */
+        /* ================= UI 切換 ================= */
         function toggleModal(modalId) {
             const modal = document.getElementById(modalId);
             modal.classList.toggle('hidden');
@@ -429,15 +532,15 @@
                         <p class="text-blue-600 text-sm mb-1">${item.translation}</p>
                         <p class="text-xs text-gray-400">${item.time}</p>
                     </div>
-                    <button onclick="deleteItem('${type}', ${item.id})" class="text-red-400 hover:text-red-600 font-bold p-1">&times;</button>
+                    <button onclick="deleteItem('${type}', ${item.id})" class="text-red-400 hover:text-red-600 font-bold p-1 leading-none text-xl">&times;</button>
                 </div>
             `;
             
             document.getElementById('vocabContent').innerHTML = appData.vocabulary.length ? 
-                appData.vocabulary.map(v => renderItem(v, 'vocabulary')).join('') : '<p class="text-center text-gray-400 mt-4">尚無生詞紀錄</p>';
+                appData.vocabulary.map(v => renderItem(v, 'vocabulary')).join('') : '<p class="text-center text-gray-400 mt-4 text-sm font-bold">尚無生詞紀錄</p>';
                 
             document.getElementById('historyContent').innerHTML = appData.history.length ? 
-                appData.history.map(h => renderItem(h, 'history')).join('') : '<p class="text-center text-gray-400 mt-4">尚無歷史紀錄</p>';
+                appData.history.map(h => renderItem(h, 'history')).join('') : '<p class="text-center text-gray-400 mt-4 text-sm font-bold">尚無歷史紀錄</p>';
         }
     </script>
 </body>
