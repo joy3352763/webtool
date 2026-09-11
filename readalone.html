@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web 互動點讀筆</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Tesseract.js 用於純前端 OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        /* 隱藏捲軸但保持可捲動 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        /* 點擊高亮動畫 */
+        .highlight-flash { animation: flash 0.5s ease-out; }
+        @keyframes flash {
+            0% { background-color: rgba(250, 204, 21, 0.6); }
+            100% { background-color: rgba(250, 204, 21, 0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans text-gray-800 antialiased selection:bg-blue-200">
+
+    <!-- 主容器，模擬手機 App 介面 -->
+    <div class="max-w-md mx-auto bg-white min-h-screen shadow-xl relative flex flex-col overflow-hidden">
+        
+        <!-- 頂部導航列 -->
+        <header class="bg-blue-600 text-white p-4 flex justify-between items-center z-10 shadow-md">
+            <h1 class="text-xl font-bold tracking-wide">Web 點讀筆</h1>
+            <div class="flex gap-3">
+                <button onclick="toggleModal('settingsModal')" class="p-1 hover:bg-blue-700 rounded transition">⚙️設定</button>
+                <button onclick="toggleModal('dataModal')" class="p-1 hover:bg-blue-700 rounded transition">📁資料</button>
+            </div>
+        </header>
+
+        <!-- 主要內容區 -->
+        <main class="flex-1 overflow-y-auto relative bg-gray-50 p-2 no-scrollbar" id="mainScroll">
+            <!-- 拍照/上傳區 -->
+            <div class="mb-4 text-center mt-4">
+                <label class="bg-blue-500 text-white px-6 py-3 rounded-full shadow-lg font-semibold cursor-pointer active:bg-blue-600 transition inline-block">
+                    📷 拍攝或選擇照片
+                    <input type="file" accept="image/*" capture="environment" id="imageInput" class="hidden">
+                </label>
+            </div>
+
+            <!-- 狀態提示 -->
+            <div id="statusText" class="text-center text-sm text-gray-500 mb-2 h-5"></div>
+
+            <!-- 圖片與互動疊加層容器 -->
+            <div id="imageContainer" class="relative w-full shadow-sm bg-white border border-gray-200 hidden mx-auto" style="max-width: 100%;">
+                <img id="sourceImage" class="w-full h-auto block" alt="來源圖片">
+                <div id="overlayContainer" class="absolute top-0 left-0 w-full h-full pointer-events-none"></div>
+            </div>
+        </main>
+
+        <!-- 底部互動面板 (翻譯結果與功能) -->
+        <div class="bg-white border-t border-gray-200 p-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-10 shrink-0">
+            <div class="mb-2">
+                <p class="text-xs text-gray-500 font-semibold mb-1">原文</p>
+                <p id="originalText" class="text-sm font-medium text-gray-800 min-h-[1.25rem]">等待點讀...</p>
+            </div>
+            <div class="mb-3">
+                <p class="text-xs text-blue-500 font-semibold mb-1">翻譯</p>
+                <p id="translatedText" class="text-base text-blue-700 min-h-[1.5rem]"></p>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="readWholePage()" class="flex-1 bg-green-500 text-white py-2 rounded-lg font-medium active:bg-green-600 transition">
+                    ▶️ 整頁朗讀
+                </button>
+                <button onclick="saveToVocab()" class="flex-1 bg-yellow-400 text-yellow-900 py-2 rounded-lg font-medium active:bg-yellow-500 transition">
+                    ⭐ 存入生詞本
+                </button>
+            </div>
+        </div>
+
+        <!-- 模態框：語音設定 -->
+        <div id="settingsModal" class="hidden absolute inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+            <div class="bg-white w-full sm:w-11/12 sm:rounded-xl rounded-t-xl p-5 shadow-2xl transition-transform">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold">語音設定 (TTS)</h2>
+                    <button onclick="toggleModal('settingsModal')" class="text-gray-500 text-xl font-bold p-2">&times;</button>
+                </div>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">語速 (Rate): <span id="rateVal">1.0</span></label>
+                        <input type="range" id="rateInput" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">音調 (Pitch): <span id="pitchVal">1.0</span></label>
+                        <input type="range" id="pitchInput" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">人聲選擇 (Voice)</label>
+                        <select id="voiceSelect" class="w-full p-2 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500 text-sm"></select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 模態框：資料管理 (生詞本與歷史) -->
+        <div id="dataModal" class="hidden absolute inset-0 bg-white z-50 flex flex-col">
+            <header class="bg-gray-800 text-white p-4 flex justify-between items-center">
+                <h2 class="text-lg font-bold">資料管理</h2>
+                <button onclick="toggleModal('dataModal')" class="text-white text-xl font-bold px-2">&times;</button>
+            </header>
+            <div class="flex border-b border-gray-200">
+                <button onclick="switchTab('vocab')" id="tab-vocab" class="flex-1 py-3 text-center font-bold border-b-2 border-blue-500 text-blue-600">生詞本</button>
+                <button onclick="switchTab('history')" id="tab-history" class="flex-1 py-3 text-center font-bold border-b-2 border-transparent text-gray-500">歷史紀錄</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4 bg-gray-50 no-scrollbar">
+                <div id="vocabContent" class="space-y-3"></div>
+                <div id="historyContent" class="hidden space-y-3"></div>
+            </div>
+            <div class="p-4 border-t border-gray-200 flex gap-2 bg-white">
+                <button onclick="exportData()" class="flex-1 bg-gray-200 text-gray-800 py-2 rounded font-medium active:bg-gray-300">匯出 JSON</button>
+                <label class="flex-1 bg-gray-800 text-white py-2 rounded font-medium text-center cursor-pointer active:bg-gray-900">
+                    匯入 JSON
+                    <input type="file" accept=".json" class="hidden" onchange="importData(event)">
+                </label>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- JavaScript 邏輯 -->
+    <script>
+        /* ================= 設定區 ================= */
+        // 請在此填入你的 Google Translate API Key
+        const GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY_HERE"; 
+        
+        /* ================= 狀態變數 ================= */
+        let ocrLines = []; 
+        let appData = { vocabulary: [], history: [] };
+        let currentFocusText = "";
+        let currentFocusTrans = "";
+        
+        // 語音合成器初始化
+        const synth = window.speechSynthesis;
+        let voices = [];
+
+        /* ================= 初始化與事件綁定 ================= */
+        document.addEventListener("DOMContentLoaded", () => {
+            loadData();
+            initTTS();
+            
+            // 綁定設定拉桿顯示數值
+            document.getElementById('rateInput').addEventListener('input', (e) => {
+                document.getElementById('rateVal').innerText = parseFloat(e.target.value).toFixed(1);
+            });
+            document.getElementById('pitchInput').addEventListener('input', (e) => {
+                document.getElementById('pitchVal').innerText = parseFloat(e.target.value).toFixed(1);
+            });
+
+            // 圖片上傳事件
+            document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+        });
+
+        /* ================= 語音 (TTS) 模組 ================= */
+        function initTTS() {
+            const populateVoices = () => {
+                voices = synth.getVoices().filter(v => v.lang.startsWith('en'));
+                const voiceSelect = document.getElementById('voiceSelect');
+                voiceSelect.innerHTML = '';
+                voices.forEach((voice, i) => {
+                    const option = document.createElement('option');
+                    option.textContent = `${voice.name} (${voice.lang})`;
+                    option.value = i;
+                    voiceSelect.appendChild(option);
+                });
+            };
+            populateVoices();
+            if (speechSynthesis.onvoiceschanged !== undefined) {
+                speechSynthesis.onvoiceschanged = populateVoices;
+            }
+        }
+
+        function speak(text) {
+            synth.cancel(); // 停止先前的發音
+            if (!text) return;
+            const utterance = new SpeechSynthesisUtterance(text);
+            
+            // 套用設定
+            const selectedVoiceIndex = document.getElementById('voiceSelect').value;
+            if (voices[selectedVoiceIndex]) utterance.voice = voices[selectedVoiceIndex];
+            utterance.rate = document.getElementById('rateInput').value;
+            utterance.pitch = document.getElementById('pitchInput').value;
+            
+            synth.speak(utterance);
+        }
+
+        async function readWholePage() {
+            if(ocrLines.length === 0) return alert("沒有可朗讀的內容");
+            const fullText = ocrLines.map(line => line.text).join(". ");
+            speak(fullText);
+            document.getElementById('originalText').innerText = "正在朗讀整頁...";
+            document.getElementById('translatedText').innerText = "";
+        }
+
+        /* ================= OCR 與圖片處理 ================= */
+        async function handleImageUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const imgEl = document.getElementById('sourceImage');
+            const container = document.getElementById('imageContainer');
+            const overlay = document.getElementById('overlayContainer');
+            const status = document.getElementById('statusText');
+            
+            overlay.innerHTML = '';
+            container.classList.remove('hidden');
+            imgEl.src = URL.createObjectURL(file);
+            
+            status.innerText = "⏳ 正在辨識文字中，請稍候...";
+            
+            try {
+                const worker = await Tesseract.createWorker('eng');
+                const { data } = await worker.recognize(imgEl.src);
+                ocrLines = data.lines; 
+                await worker.terminate();
+                
+                status.innerText = "✅ 辨識完成，請點擊圖片上的句子！";
+                createOverlays(imgEl);
+            } catch (error) {
+                console.error(error);
+                status.innerText = "❌ 辨識失敗，請重試。";
+            }
+        }
+
+        function createOverlays(imgEl) {
+            const overlayContainer = document.getElementById('overlayContainer');
+            overlayContainer.innerHTML = '';
+            overlayContainer.classList.remove('pointer-events-none'); // 允許點擊
+
+            // 計算圖片實際顯示比例
+            const naturalW = imgEl.naturalWidth;
+            const naturalH = imgEl.naturalHeight;
+
+            ocrLines.forEach(line => {
+                if(line.text.trim().length < 2) return; // 忽略太短的雜訊
+                const bbox = line.bbox;
+                
+                // 轉換為百分比，確保 RWD 縮放時位置精準
+                const left = (bbox.x0 / naturalW) * 100;
+                const top = (bbox.y0 / naturalH) * 100;
+                const width = ((bbox.x1 - bbox.x0) / naturalW) * 100;
+                const height = ((bbox.y1 - bbox.y0) / naturalH) * 100;
+
+                const div = document.createElement('div');
+                div.className = 'absolute border-2 border-transparent cursor-pointer transition-colors';
+                div.style.left = `${left}%`;
+                div.style.top = `${top}%`;
+                div.style.width = `${width}%`;
+                div.style.height = `${height}%`;
+
+                // 綁定點擊事件
+                div.addEventListener('click', async (e) => {
+                    // 視覺回饋
+                    div.classList.remove('highlight-flash');
+                    void div.offsetWidth; // 觸發重繪
+                    div.classList.add('highlight-flash');
+                    
+                    const text = line.text.replace(/\n/g, ' ').trim();
+                    currentFocusText = text;
+                    document.getElementById('originalText').innerText = text;
+                    document.getElementById('translatedText').innerText = "翻譯中...";
+                    
+                    // 朗讀
+                    speak(text);
+                    
+                    // 翻譯
+                    const translated = await fetchTranslation(text);
+                    currentFocusTrans = translated;
+                    document.getElementById('translatedText').innerText = translated;
+
+                    // 寫入歷史
+                    addToHistory(text, translated);
+                });
+
+                overlayContainer.appendChild(div);
+            });
+        }
+
+        /* ================= 翻譯 API ================= */
+        async function fetchTranslation(text) {
+            if(!text) return "";
+            
+            // 若有設定 Google API Key
+            if(GOOGLE_API_KEY && GOOGLE_API_KEY !== "YOUR_GOOGLE_API_KEY_HERE") {
+                try {
+                    const url = `https://translation.googleapis.com/language/translate/v2?key=${GOOGLE_API_KEY}`;
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ q: text, target: 'zh-TW', format: 'text' })
+                    });
+                    const data = await res.json();
+                    return data.data.translations[0].translatedText;
+                } catch(e) {
+                    console.error("Google 翻譯失敗:", e);
+                    return "翻譯失敗，請檢查 API 狀態";
+                }
+            } 
+            // 備用免費 API (MyMemory) 用於無 Key 測試
+            else {
+                try {
+                    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh-TW`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    return data.responseData.translatedText;
+                } catch(e) {
+                    return "無法連線至免費翻譯服務。";
+                }
+            }
+        }
+
+        /* ================= Local JSON 資料儲存 ================= */
+        const STORAGE_KEY = 'readingPenAppData';
+
+        function loadData() {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if(saved) {
+                appData = JSON.parse(saved);
+            }
+        }
+
+        function persistData() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            renderDataLists(); // 更新 UI
+        }
+
+        function addToHistory(text, translation) {
+            // 避免重複連續記錄一樣的句子
+            if(appData.history.length > 0 && appData.history[0].text === text) return;
+            
+            appData.history.unshift({
+                id: Date.now(),
+                text: text,
+                translation: translation,
+                time: new Date().toLocaleString()
+            });
+            // 只保留最新 50 筆
+            if(appData.history.length > 50) appData.history.pop();
+            persistData();
+        }
+
+        function saveToVocab() {
+            if(!currentFocusText) return alert("請先點擊翻譯句子！");
+            
+            const exists = appData.vocabulary.find(v => v.text === currentFocusText);
+            if(exists) return alert("已經在生詞本中了！");
+
+            appData.vocabulary.unshift({
+                id: Date.now(),
+                text: currentFocusText,
+                translation: currentFocusTrans,
+                time: new Date().toLocaleString()
+            });
+            persistData();
+            
+            // 特效回饋
+            const btn = document.querySelector('button[onclick="saveToVocab()"]');
+            const originalTxt = btn.innerText;
+            btn.innerText = "✔️ 已存入";
+            setTimeout(() => btn.innerText = originalTxt, 1500);
+        }
+
+        function deleteItem(type, id) {
+            appData[type] = appData[type].filter(item => item.id !== id);
+            persistData();
+        }
+
+        /* ================= 匯出與匯入 ================= */
+        function exportData() {
+            const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const dateStr = new Date().toISOString().split('T')[0];
+            a.download = `reading_pen_backup_${dateStr}.json`;
+            a.click();
+        }
+
+        function importData(e) {
+            const file = e.target.files[0];
+            if(!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const parsed = JSON.parse(event.target.result);
+                    if(parsed.vocabulary && parsed.history) {
+                        appData = parsed;
+                        persistData();
+                        alert("資料還原成功！");
+                        e.target.value = ''; // 清空 input
+                    } else {
+                        alert("JSON 格式不符");
+                    }
+                } catch(err) {
+                    alert("檔案讀取失敗");
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        /* ================= UI 互動 (模態框與切換) ================= */
+        function toggleModal(modalId) {
+            const modal = document.getElementById(modalId);
+            modal.classList.toggle('hidden');
+            if(!modal.classList.contains('hidden') && modalId === 'dataModal') {
+                renderDataLists();
+                switchTab('vocab');
+            }
+        }
+
+        function switchTab(tab) {
+            document.getElementById('vocabContent').classList.toggle('hidden', tab !== 'vocab');
+            document.getElementById('historyContent').classList.toggle('hidden', tab !== 'history');
+            
+            document.getElementById('tab-vocab').className = `flex-1 py-3 text-center font-bold border-b-2 ${tab === 'vocab' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`;
+            document.getElementById('tab-history').className = `flex-1 py-3 text-center font-bold border-b-2 ${tab === 'history' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`;
+        }
+
+        function renderDataLists() {
+            const renderItem = (item, type) => `
+                <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-100 flex justify-between items-start">
+                    <div class="flex-1 pr-2">
+                        <p class="font-bold text-gray-800 text-sm mb-1">${item.text}</p>
+                        <p class="text-blue-600 text-sm mb-1">${item.translation}</p>
+                        <p class="text-xs text-gray-400">${item.time}</p>
+                    </div>
+                    <button onclick="deleteItem('${type}', ${item.id})" class="text-red-400 hover:text-red-600 font-bold p-1">&times;</button>
+                </div>
+            `;
+            
+            document.getElementById('vocabContent').innerHTML = appData.vocabulary.length ? 
+                appData.vocabulary.map(v => renderItem(v, 'vocabulary')).join('') : '<p class="text-center text-gray-400 mt-4">尚無生詞紀錄</p>';
+                
+            document.getElementById('historyContent').innerHTML = appData.history.length ? 
+                appData.history.map(h => renderItem(h, 'history')).join('') : '<p class="text-center text-gray-400 mt-4">尚無歷史紀錄</p>';
+        }
+    </script>
+</body>
+</html>
