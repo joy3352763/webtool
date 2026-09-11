@@ -197,7 +197,7 @@
         let currentFocusText = "";
         let currentFocusTrans = "";
         
-        let cropper = null; // Cropper 實例
+        let cropper = null; 
         const synth = window.speechSynthesis;
         let voices = [];
         let isReadingFullPage = false;
@@ -224,7 +224,7 @@
             synth.oncancel = synth.onend;
         });
 
-        /* ================= 語音模組 (同前) ================= */
+        /* ================= 語音模組 ================= */
         function initTTS() {
             const populateVoices = () => {
                 let allVoices = synth.getVoices();
@@ -299,14 +299,15 @@
         }
 
         /* ================= 影像處理與裁切 ================= */
-        // 進入重置狀態
         function resetApp() {
             if (cropper) { cropper.destroy(); cropper = null; }
             document.getElementById('imageInput').value = '';
             document.getElementById('imageContainerWrapper').classList.add('hidden');
             document.getElementById('overlayContainer').classList.add('hidden');
             document.getElementById('cropActionContainer').classList.add('hidden');
+            document.getElementById('cropActionContainer').classList.remove('flex');
             document.getElementById('resetBtnContainer').classList.add('hidden');
+            document.getElementById('resetBtnContainer').classList.remove('flex');
             document.getElementById('uploadBtnLabel').classList.remove('hidden');
             document.getElementById('statusText').innerText = "請拍攝書籍或文字";
             document.getElementById('statusText').className = "text-center text-sm font-bold text-gray-500 mb-2 shrink-0 h-5";
@@ -326,28 +327,31 @@
             imgEl.src = URL.createObjectURL(file);
             
             document.getElementById('imageContainerWrapper').classList.remove('hidden');
-            document.getElementById('cropActionContainer').classList.remove('hidden'); flex-col
+            // 【修復】這裡原本多了一段不合法的語法，已更正
+            document.getElementById('cropActionContainer').classList.remove('hidden'); 
             document.getElementById('cropActionContainer').classList.add('flex');
-            document.getElementById('uploadBtnLabel').classList.add('hidden'); // 隱藏拍照按鈕
+            document.getElementById('uploadBtnLabel').classList.add('hidden'); 
             
             document.getElementById('statusText').innerText = "請框選欲辨識的範圍";
             document.getElementById('statusText').className = "text-center text-sm font-bold text-blue-500 mb-2 shrink-0 h-5";
 
             // 圖片載入完成後初始化 Cropper
             imgEl.onload = () => {
+                // 如果已經存在舊實例就先銷毀 (防連點)
+                if (cropper) { cropper.destroy(); }
                 cropper = new Cropper(imgEl, {
-                    viewMode: 1, // 限制裁切框不能超出圖片邊緣
+                    viewMode: 1, 
                     dragMode: 'crop',
-                    autoCropArea: 0.8, // 預設框選 80% 區域
+                    autoCropArea: 0.8, 
                     background: false,
                     zoomable: false,
                 });
             };
         }
 
-        // 執行 OCR (是否只針對裁切區域)
         async function processOCR(useCropped) {
-            if (!cropper) return;
+            if (!cropper) return; // 確保有 cropper 實例
+            
             const status = document.getElementById('statusText');
             status.innerText = "⏳ 正在辨識文字中，請稍候...";
             
@@ -355,17 +359,14 @@
             document.getElementById('cropActionContainer').classList.add('hidden');
             document.getElementById('cropActionContainer').classList.remove('flex');
             
-            // 取得要辨識的圖片 URL (Base64)
             let imageToRecognize = '';
-            let finalImageSrc = ''; // 用於展示在畫面上
+            let finalImageSrc = ''; 
 
             if (useCropped) {
-                // 取得裁切後的圖片資料
                 const canvas = cropper.getCroppedCanvas();
                 imageToRecognize = canvas.toDataURL('image/jpeg');
                 finalImageSrc = imageToRecognize; 
             } else {
-                // 使用原圖
                 imageToRecognize = document.getElementById('sourceImage').src;
                 finalImageSrc = imageToRecognize;
             }
@@ -373,12 +374,12 @@
             // 銷毀 Cropper 介面，換回純圖片展示
             cropper.destroy();
             cropper = null;
+            
             const imgEl = document.getElementById('sourceImage');
             imgEl.src = finalImageSrc;
             
             try {
                 const worker = await Tesseract.createWorker('eng');
-                // 優化設定：設定 PSM 為 6 (Assume a single uniform block of text) 減少段落切碎問題
                 await worker.setParameters({
                     tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
                 });
@@ -389,11 +390,9 @@
                 status.innerText = "✅ 辨識完成，有色區塊可點擊！";
                 status.className = "text-center text-sm font-bold text-green-500 mb-2 shrink-0 h-5";
                 
-                // 顯示重新拍照按鈕
                 document.getElementById('resetBtnContainer').classList.remove('hidden');
                 document.getElementById('resetBtnContainer').classList.add('flex');
 
-                // 等待圖片載入完成後建立圖層 (確保取得正確的 naturalWidth/Height)
                 imgEl.onload = () => { createOverlays(imgEl); };
             } catch (error) {
                 console.error(error);
@@ -455,7 +454,7 @@
             updateBoxStyle();
         }
 
-        /* ================= 翻譯 API 與 資料儲存 (同前) ================= */
+        /* ================= 翻譯 API 與 資料儲存 ================= */
         async function fetchTranslation(text) {
             if(!text) return "";
             if(GOOGLE_API_KEY && GOOGLE_API_KEY !== "YOUR_GOOGLE_API_KEY_HERE") {
