@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>機敏資料清洗工具 (Offline Data Sanitizer)</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .panel { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .full-width { grid-column: 1 / -1; }
+        h2 { font-size: 1.2rem; margin-top: 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+        textarea { width: 100%; height: 200px; padding: 10px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 4px; resize: vertical; font-family: monospace; }
+        button { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; margin-right: 5px; margin-bottom: 5px; }
+        button:hover { background: #2563eb; }
+        button.danger { background: #ef4444; }
+        button.danger:hover { background: #dc2626; }
+        button.success { background: #10b981; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; }
+        th { background: #f8fafc; }
+        input[type="text"] { width: 90%; padding: 6px; box-sizing: border-box; }
+        .file-input-wrapper { display: inline-block; margin-right: 5px; }
+        .file-input-wrapper input[type="file"] { display: none; }
+        .file-input-wrapper label { background: #64748b; color: white; padding: 8px 16px; border-radius: 4px; cursor: pointer; display: inline-block; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- 規則配置區 -->
+    <div class="panel full-width">
+        <h2>1. 轉換規則配置 (Rules)</h2>
+        <div>
+            <button onclick="addRule()">+ 新增規則</button>
+            <button onclick="exportRules()">匯出配置 (JSON)</button>
+            <div class="file-input-wrapper">
+                <label for="importRulesFile">匯入配置 (JSON)</label>
+                <input type="file" id="importRulesFile" accept=".json" onchange="importRules(event)">
+            </div>
+        </div>
+        <table id="rulesTable">
+            <thead>
+                <tr>
+                    <th width="15%">類型</th>
+                    <th width="35%">尋找目標 (字串或正則表達式)</th>
+                    <th width="35%">替換為 (測試用資料)</th>
+                    <th width="15%">操作</th>
+                </tr>
+            </thead>
+            <tbody id="rulesBody">
+                <!-- 預設規則 -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 輸入區 -->
+    <div class="panel">
+        <h2>2. 原始資料 (Raw Data)</h2>
+        <textarea id="inputText" placeholder="請貼上需要清洗的機敏資料..."></textarea>
+        <br><br>
+        <button class="success" onclick="sanitizeData()">執行清洗 >></button>
+    </div>
+
+    <!-- 輸出區 -->
+    <div class="panel">
+        <h2>3. 清洗後結果 (Sanitized Data)</h2>
+        <textarea id="outputText" placeholder="清洗後的資料將顯示於此..."></textarea>
+    </div>
+
+    <!-- 對照表區 -->
+    <div class="panel full-width">
+        <h2>4. 對照表與還原 (Mapping & Restoration)</h2>
+        <div>
+            <button onclick="exportResult()">匯出結果與對照表 (JSON)</button>
+            <div class="file-input-wrapper">
+                <label for="importResultFile">匯入結果與對照表進行還原 (JSON)</label>
+                <input type="file" id="importResultFile" accept=".json" onchange="importResult(event)">
+            </div>
+            <button class="danger" onclick="restoreData()" style="float: right;"><< 執行還原</button>
+        </div>
+        <textarea id="mappingText" style="height: 150px; background: #f8fafc;" readonly placeholder="自動產生的對照表 (JSON 格式)..."></textarea>
+    </div>
+</div>
+
+<script>
+    // 初始預設規則
+    let rules = [
+        { type: 'string', find: 'abc.com.tw', replace: 'OOO.com.tw' },
+        { type: 'string', find: '192.168.1.1', replace: '192.192.192.192' },
+        { type: 'regex', find: '[A-Z][12]\\d{8}', replace: 'A123456789' }, // 預設身分證字號正則
+        { type: 'regex', find: '09\\d{8}', replace: '0900000000' } // 預設手機號碼正則
+    ];
+
+    let mappingDict = {};
+
+    function renderRules() {
+        const tbody = document.getElementById('rulesBody');
+        tbody.innerHTML = '';
+        rules.forEach((rule, index) => {
+            tbody.innerHTML += `
+                <tr>
+                    <td>
+                        <select onchange="updateRule(${index}, 'type', this.value)">
+                            <option value="string" ${rule.type === 'string' ? 'selected' : ''}>一般字串</option>
+                            <option value="regex" ${rule.type === 'regex' ? 'selected' : ''}>正規表達式 (Regex)</option>
+                        </select>
+                    </td>
+                    <td><input type="text" value="${rule.find}" onchange="updateRule(${index}, 'find', this.value)"></td>
+                    <td><input type="text" value="${rule.replace}" onchange="updateRule(${index}, 'replace', this.value)"></td>
+                    <td><button class="danger" onclick="removeRule(${index})">刪除</button></td>
+                </tr>
+            `;
+        });
+    }
+
+    function updateRule(index, field, value) { rules[index][field] = value; }
+    function addRule() { rules.push({ type: 'string', find: '', replace: '' }); renderRules(); }
+    function removeRule(index) { rules.splice(index, 1); renderRules(); }
+
+    // 下載 JSON 的共用函數
+    function downloadJSON(obj, filename) {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(obj, null, 2));
+        const anchor = document.createElement('a');
+        anchor.setAttribute("href", dataStr);
+        anchor.setAttribute("download", filename);
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+    }
+
+    // 讀取 JSON 檔案的共用函數
+    function readJSON(file, callback) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const result = JSON.parse(e.target.result);
+                callback(result);
+            } catch (err) {
+                alert('JSON 解析失敗！');
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // 1. 匯出/匯入規則
+    function exportRules() { downloadJSON(rules, 'sanitizer_rules.json'); }
+    function importRules(event) {
+        if (!event.target.files[0]) return;
+        readJSON(event.target.files[0], (data) => {
+            if (Array.isArray(data)) {
+                rules = data;
+                renderRules();
+                alert('規則匯入成功！');
+            } else {
+                alert('規則格式錯誤！');
+            }
+        });
+        event.target.value = ''; // Reset input
+    }
+
+    // 2. 執行清洗
+    function sanitizeData() {
+        let text = document.getElementById('inputText').value;
+        mappingDict = {}; // 重置對照表
+
+        rules.forEach((rule, index) => {
+            if (!rule.find || !rule.replace) return;
+            
+            if (rule.type === 'string') {
+                // 字串替換，同時記錄對照
+                if (text.includes(rule.find)) {
+                    mappingDict[rule.find] = rule.replace;
+                    text = text.split(rule.find).join(rule.replace);
+                }
+            } else if (rule.type === 'regex') {
+                // 正則替換，需抓取實際匹配的原始值
+                try {
+                    const regex = new RegExp(rule.find, 'g');
+                    text = text.replace(regex, (match) => {
+                        // 為了避免多個不同的原始值被換成同一個假資料導致無法還原 (Collision)
+                        // 這裡自動在替換字串後方加上索引，確保 1 對 1 映射
+                        const uniqueReplace = `${rule.replace}_${Object.keys(mappingDict).length + 1}`;
+                        
+                        // 若該值已經存在對照表中，則使用原本的替換值
+                        let existingReplace = Object.keys(mappingDict).find(k => k === match);
+                        if(existingReplace) {
+                            return mappingDict[existingReplace];
+                        }
+
+                        mappingDict[match] = uniqueReplace;
+                        return uniqueReplace;
+                    });
+                } catch (err) {
+                    console.error(`正則表達式錯誤: ${rule.find}`, err);
+                }
+            }
+        });
+
+        document.getElementById('outputText').value = text;
+        document.getElementById('mappingText').value = JSON.stringify(mappingDict, null, 2);
+    }
+
+    // 3. 匯出結果與對照表
+    function exportResult() {
+        const outputText = document.getElementById('outputText').value;
+        if (!outputText) return alert('沒有可匯出的結果！');
+        
+        const exportData = {
+            sanitizedText: outputText,
+            mappingTable: mappingDict
+        };
+        downloadJSON(exportData, 'sanitized_result.json');
+    }
+
+    // 4. 匯入結果與對照表
+    function importResult(event) {
+        if (!event.target.files[0]) return;
+        readJSON(event.target.files[0], (data) => {
+            if (data.sanitizedText !== undefined && data.mappingTable !== undefined) {
+                document.getElementById('outputText').value = data.sanitizedText;
+                mappingDict = data.mappingTable;
+                document.getElementById('mappingText').value = JSON.stringify(mappingDict, null, 2);
+                alert('清洗結果與對照表匯入成功！您可以點擊執行還原。');
+            } else {
+                alert('匯入的資料格式不符！');
+            }
+        });
+        event.target.value = '';
+    }
+
+    // 5. 執行還原
+    function restoreData() {
+        let textToRestore = document.getElementById('outputText').value;
+        const currentMapping = JSON.parse(document.getElementById('mappingText').value || '{}');
+
+        // 將對照表反轉 (Masked -> Original)
+        // 注意：依照替換字串長度排序，避免短字串取代長字串的部分內容
+        const sortedMaskedKeys = Object.values(currentMapping).sort((a, b) => b.length - a.length);
+        
+        sortedMaskedKeys.forEach(maskedValue => {
+            // 找出對應的原始值
+            const originalValue = Object.keys(currentMapping).find(key => currentMapping[key] === maskedValue);
+            if (originalValue) {
+                textToRestore = textToRestore.split(maskedValue).join(originalValue);
+            }
+        });
+
+        document.getElementById('inputText').value = textToRestore;
+        alert('還原完成，請查看「原始資料」區塊！');
+    }
+
+    // 初始化畫面
+    renderRules();
+</script>
+
+</body>
+</html>
